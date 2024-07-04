@@ -5,28 +5,44 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- Make sure that no communication with external sites is possible -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;">
     <title>Offline QR code generator</title>
     <script>
+        const get_or_default_int = (name, default_value) => {
+            const stored = localStorage.getItem(name);
+            if (stored != null) {
+                try {
+                    return parseInt(stored);
+                } catch (error) {
+                    console.warn(`Failed to parse stored entry for '${name}'`);
+                }
+            }
+            return default_value;
+        }
+
         // ================== Start of user settings ==================
         // You can modify these settings without breaking stuff
-        
-        // Level L – up to 7% damage
-        // Level M – up to 15% damage
-        // Level Q – up to 25% damage
-        // Level H – up to 30% damage
-        const ERROR_CORRECTION_LEVEL = "L";
-        const MAX_TEXT_LENGTH = 2950;// Only valid for Error Correction Level L
+
+        // Thanks to @d3xbot for providing the numbers
+        // ERROR_CORRECTION_LEVEL L – up to 7% damage - MAX_TEXT_LENGTH: 2953
+        // ERROR_CORRECTION_LEVEL M – up to 15% damage - MAX_TEXT_LENGTH: 2331
+        // ERROR_CORRECTION_LEVEL Q – up to 25% damage - MAX_TEXT_LENGTH: 1663
+        // ERROR_CORRECTION_LEVEL H – up to 30% damage - MAX_TEXT_LENGTH: 1273
+        let ERROR_CORRECTION_LEVEL = localStorage.getItem("ERROR_CORRECTION_LEVEL") || "L";
 
         // Allow users to enable the clipboard monitoring function. Set this to false to hide the checkbox
-        const SHOW_CLIPBOARD_MONITORING_CONTROLS = true;
+        let SHOW_CLIPBOARD_MONITORING_CONTROLS = true;
 
         // Size of the QR code in pixels. Set it to 0 to automatically fit the free space
-        const QR_MIN_SIZE = 30;
-        const QR_MAX_SIZE = Infinity;
+        let QR_MIN_SIZE = get_or_default_int("QR_MIN_SIZE", 30); //in pixels
+        let QR_MAX_SIZE = get_or_default_int("QR_MAX_SIZE", Infinity); // in pixels
+
+        // If you want a border around the QR code (that will stay when you right click -> "Save image as..." the image, set this to something greater than zero)
+        let QR_BORDER_SIZE = get_or_default_int("QR_BORDER_SIZE", 0); // in pixels
+        let QR_BORDER_COLOR = localStorage.getItem("QR_BORDER_COLOR") || "#909090"; // standard html color codes
         // =================== End of user settings ===================
     </script>
-    
+
     <style>
         * {
             box-sizing: border-box;
@@ -82,7 +98,7 @@
             display: flex;
             flex-direction: column;
         }
-        
+
         #input {
             width: 100%;
             height: 100%;
@@ -94,7 +110,7 @@
             margin-bottom: 10px;
             display: none;
         }
-        
+
         .error {
             width: 100%;
             background-color: rgb(255, 140, 140);
@@ -119,7 +135,7 @@
     <header id="header">
         <div class="title">Offline QR code generator</div>
         <div class="expand"></div>
-        
+
         <div id="monitor-clipboard" class="button"></div>
         <a id="download" href="" download>Download</a>
         <a href="https://github.com/six-two/qr.html" target="_blank" rel="noopener noreferrer">Source code</a>
@@ -127,29 +143,61 @@
     <div id="text-and-qr">
         <div id="input-div">
             <div id="input-error" class="error"></div>
-            <textarea id="input" name="input" id="" autofocus>You can generate QR codes from any text by typing in in this box. The code generation is performed on your local device, no data is sent anywhere.
+            <textarea id="input" name="input" placeholder="Type the data you want to convert to a QR code here. Alternatively you can try to drag and drop or copy-paste a file in this text box, but not all browsers/operating systems support that." id="" autofocus>You can generate QR codes from any text by typing in in this box. The code generation is performed on your local device, no data is sent anywhere.
 You can even download this file (see button on the top right) and use it when you are not connected to the Internet.
 If the layout looks strange, try resizing your browser window. It always tries to maximize the QR code's size, which can look strange sometimes.
 
-⚠️ The maximum size of a QR code is 2950 bytes
+⚠️ The maximum size of a QR code is 2953 bytes (one character is normally one byte, although foreign language characters and emojis take up multiple bytes)
 ⚠️ Some features will not work in some browsers. In my experience Google Chrome works best.
 🎉 This should now also work with Emojis
 📁 You can now drag and drop a file in this text box
 📁 And you can copy-paste a file to this text area
+
+Here are some examples of what you can do with QR codes:
+- Link to a website: https://your-website.com/some/page?with=parameters
+- Share email address: mailto:your.name@gmail.com
+- Share phone number: tel:+49123456789
+- Share WLAN network password: WIFI:T:WPA;S:Your WLAN name;P:Your WLAN password;;
+- Send SMS: smsto:+49123456789:Hi John, how are you? 
+- Send email: mailto:recipient@example.com?subject=Test email&body=This is a test email
+- Add second factor to Google Authenticator: otpauth://totp/Issuer Name:alice@google.com?secret=JBSWY3DPEHPK3PXP&issuer=Issuer Name
 </textarea>
         </div>
         <div id="qrcode"><div class="error">You need to enable JavaScript to use this page</div></div>
     </div>
 
 <script type="text/javascript">
+    // Automatically select the matching maximum size
+    const MAX_TEXT_LENGTH_FOR = {
+        "L": 2953,
+        "M": 2331,
+        "Q": 1663,
+        "H": 1273,
+    };
+
     const header = document.getElementById("header");
     const qrcode = document.getElementById("qrcode");
     const input_area = document.getElementById("input");
     const input_error = document.getElementById("input-error");
     const text_and_qr = document.getElementById("text-and-qr");
 
+    const onHashUpdate = () => {
+        if (location.hash.length > 1) {
+            let initial_value = location.hash.slice(1); // remove leading '#'
+            initial_value = decodeURIComponent(initial_value); // URL encoded because of special characters
+            console.log("Using initial value from URL hash:", initial_value);
+            input_area.value = initial_value;
+        }
+    }
+
+    // You can set the initial value of the page via the # after the URL. This enables stuff like links and bookmarks for common values
+    // we use the hash instead of an URL parameter, since the hash is never sent to a server -> better privacy (only relevant if you use the hosted version)
+    onHashUpdate();
+    // If the user changes the hash, we should update the text box with it
+    window.addEventListener("hashchange", onHashUpdate);
+
     const PADDING = 10; // 5px on any side for the text-and-qr element -> always 10px in total
-    
+
     const showInputError = (message) => {
         // message is untrusted input, so we should escape it properly
         if (message) {
@@ -166,20 +214,27 @@ If the layout looks strange, try resizing your browser window. It always tries t
         // Bad practice, but XSS should not be possible
         qrcode.innerHTML = `<div class="error"><b>QR code generation failed:</b><br>${message}</div>`;
     }
-    
+
     const updateQRCode = () => {
         const max_size_fit_window = Math.min(qrcode.clientWidth, qrcode.clientHeight, QR_MAX_SIZE);
         const qr_size = Math.max(QR_MIN_SIZE, max_size_fit_window) - 10; // remove 2 * 5px for the paddings
 
         text = input_area.value;
+        const max_length = MAX_TEXT_LENGTH_FOR[ERROR_CORRECTION_LEVEL];
         if (!text) {
             showQrCodeGenerationError("You need to type some text in the input area! It will then be rendered as a QR code.");
-        } else if (text.length > MAX_TEXT_LENGTH) {
-            // This value was generated by trial and error
-            showQrCodeGenerationError(`Your text is ${text.length} characters long. Sadly, due to technical limitations, the maximum size QR code this app can generate is ${MAX_TEXT_LENGTH} characters. Try splitting your text into multiple smaller parts.`)
+        } else if (text.length > max_length) {
+            // If the error correction level is not L, add the suggestion of lowering it to allow more contents
+            let level_text = "", suggestion = "";
+            if (ERROR_CORRECTION_LEVEL != "L") {
+                level_text = ` with error correction level '${ERROR_CORRECTION_LEVEL}'`;
+                suggestion = ` You could also try to decrease the ERROR_CORRECTION_LEVEL setting. At level 'L' the maximum size would be ${MAX_TEXT_LENGTH_FOR["L"]} characters.`;
+            }
+            showQrCodeGenerationError(`Your text is ${text.length} characters long. Sadly, due to technical limitations, the maximum QR code size${level_text} is ${max_length} characters. Try splitting your text into multiple smaller parts.${suggestion}`);
         } else {
             // Delete the error message (in case it existed) or the old QR code
             qrcode.innerHTML = "";
+            // @TODO: I probably could do that border stuff more efficiently if I prepared a canvas and passed it to the render method
             try {
                 QrCreator.render({
                     text: text,
@@ -187,10 +242,27 @@ If the layout looks strange, try resizing your browser window. It always tries t
                     ecLevel: ERROR_CORRECTION_LEVEL,
                     fill: '#000000',
                     background: "#ffffff",
-                    size: qr_size,
+                    size: qr_size - 2 * QR_BORDER_SIZE,
                 }, qrcode);
+
+                if (QR_BORDER_SIZE > 0) {
+                    const canvas = qrcode.getElementsByTagName("canvas")[0];
+                    // copy the old image
+                    const image = document.createElement("img");
+                    image.src = canvas.toDataURL();
+
+                    ctx = canvas.getContext('2d');
+                    // clear the whole image by filling it with the border color
+                    ctx.fillStyle = QR_BORDER_COLOR;
+                    ctx.fillRect(0, 0, qr_size, qr_size);
+                    // Copy the saved image, but make it smaller, so that a bit of the border remains
+                    ctx.drawImage(image, 0, 0, qr_size, qr_size,
+                        QR_BORDER_SIZE, QR_BORDER_SIZE, qr_size - 2 * QR_BORDER_SIZE, qr_size - 2 * QR_BORDER_SIZE);
+                    console.log(QR_BORDER_SIZE, qr_size - 2 * QR_BORDER_SIZE);
+                }
             } catch (error) {
                 showQrCodeGenerationError("Failed to generate the QR code! Please try a shorter text and try removing special characters and emojis. If you are a programmer, look in the prowser console for the error message");
+                console.error("Error while generating QR code", error);
             }
         }
     };
